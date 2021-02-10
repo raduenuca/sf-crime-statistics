@@ -1,4 +1,4 @@
-# Udacity Data Streaming Nanodegree: SF Crime Statistics with Spark Streaming
+# Udacity Data Streaming Nanodegree Program: SF Crime Statistics with Spark Streaming
 
 1. How did changing values on the SparkSession property parameters affect the throughput and latency of the data?
    
