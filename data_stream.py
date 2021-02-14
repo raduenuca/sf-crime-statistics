@@ -4,7 +4,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 import pyspark.sql.functions as psf
 
-
 schema = StructType([
     StructField("crime_id", StringType(), True),
     StructField("original_crime_type_name", StringType(), True),
@@ -23,7 +22,6 @@ schema = StructType([
 ])
 
 def run_spark_job(spark):
-
     # Create Spark configurations with max offset of 200 per trigger
     # set up correct bootstrap server and port
     df = spark \
@@ -31,9 +29,10 @@ def run_spark_job(spark):
         .format("kafka") \
         .option("kafka.bootstrap.servers", "localhost:9092") \
         .option("subscribe", "org.crime.sanfrancisco.v1") \
-        .option("startingOffsets", "earliest")\
-        .option("maxRatePerPartition", 50000)\
-        .option("maxOffsetsPerTrigger", 200)\
+        .option("startingOffsets", "earliest") \
+        .option("maxRatePerPartition", 100) \
+        .option("spark.streaming.ui.retainedBatches", "100") \
+        .option("spark.streaming.ui.retainedStages", "100") \
         .option("stopGracefullyOnShutdown", "true") \
         .load()
     
@@ -43,50 +42,49 @@ def run_spark_job(spark):
     # Take only value and convert it to String
     kafka_df = df.selectExpr("CAST(value as STRING)")
 
-    service_table = kafka_df\
+    service_table = kafka_df \
         .select(psf.from_json(psf.col('value'), schema).alias("DF"))\
         .select("DF.*")
 
     distinct_table = service_table \
-        .select(psf.to_timestamp(psf.col("call_date_time")),
-                psf.col("original_crime_type_name"), 
-                psf.col("disposition"))
+        .select('original_crime_type_name', 
+                'disposition', 
+                psf.to_timestamp(psf.col("call_date_time")).alias("call_date_time")
+        ).distinct()
 
     distinct_table.printSchema()
     
     # count the number of original crime type
-    # agg_df = distinct_table.groupBy("original_crime_type_name","disposition").count()
-    agg_df = distinct_table \
+    agg_df = distinct_table\
         .select("original_crime_type_name") \
         .groupby("original_crime_type_name") \
-        .agg({"original_crime_type_name": "count"})
+        .count()
 
     query = agg_df \
             .writeStream \
-            .outputMode("complete") \
             .format("console") \
+            .outputMode("complete") \
             .start()
-
 
     query.awaitTermination()
 
     radio_code_json_filepath = "radio_code.json"
-    radio_code_df = spark.read.json(radio_code_json_filepath)
+    radio_code_df = spark.read.json(radio_code_json_filepath, multiLine=True)
 
     # clean up your data so that the column names match on radio_code_df and agg_df
     # we will want to join on the disposition code
 
     radio_code_df = radio_code_df.withColumnRenamed("disposition_code", "disposition")
-
-    join_query = agg_df.join(radio_code_df, "disposition")\
-                 .writeStream \
-                 .outputMode("append") \
-                 .format("console") \
-                 .start()
     
+    join_query = agg_df.join(radio_code_df, "disposition") \
+        .writeStream \
+        .outputMode("append") \
+        .format("console") \
+        .start()
+
     join_query.awaitTermination()
 
-
+    
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)
 
@@ -96,7 +94,7 @@ if __name__ == "__main__":
         .appName("KafkaSparkStructuredStreaming") \
         .config("spark.ui.port",3000) \
         .getOrCreate()
-
+    
     logger.info("Spark started")
 
     run_spark_job(spark)
